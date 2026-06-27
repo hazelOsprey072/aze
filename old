@@ -1,0 +1,137 @@
+import re
+from typing import List, Tuple
+
+class MarkdownParser:
+    INLINE_RULES: List[Tuple[str, str]] = [
+        (r"\*\*\*(.+?)\*\*\*",       r"<strong><em>\1</em></strong>"),
+        (r"\*\*(.+?)\*\*",           r"<strong>\1</strong>"),
+        (r"\*(.+?)\*",               r"<em>\1</em>"),
+        (r"~~(.+?)~~",               r"<del>\1</del>"),
+        (r"`(.+?)`",                 r"<code>\1</code>"),
+        (r"!\[([^\]]*)\]\(([^)]+)\)", r'<img alt="\1" src="\2">'),
+        (r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>'),
+    ]
+
+    def __init__(self):
+        self._compiled = [(re.compile(p, re.DOTALL), r) for p, r in self.INLINE_RULES]
+
+    def parse_inline(self, text: str) -> str:
+        for pattern, replacement in self._compiled:
+            text = pattern.sub(replacement, text)
+        return text
+
+    def parse(self, markdown: str) -> str:
+        lines = markdown.split("\n")
+        html_parts = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Fenced code block
+            if line.startswith("```"):
+                lang = line[3:].strip()
+                code_lines = []
+                i += 1
+                while i < len(lines) and not lines[i].startswith("```"):
+                    code_lines.append(lines[i])
+                    i += 1
+                code = "\n".join(code_lines)
+                code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                cls = f' class="language-{lang}"' if lang else ""
+                html_parts.append(f"<pre><code{cls}>{code}</code></pre>")
+                i += 1
+                continue
+
+            # Headings
+            m = re.match(r"^(#{1,6})\s+(.+)$", line)
+            if m:
+                level = len(m.group(1))
+                content = self.parse_inline(m.group(2).strip())
+                slug = re.sub(r"[^\w\s-]", "", m.group(2).lower()).strip().replace(" ", "-")
+                html_parts.append(f'<h{level} id="{slug}">{content}</h{level}>')
+                i += 1
+                continue
+
+            # Blockquote
+            if line.startswith("> "):
+                block_lines = []
+                while i < len(lines) and lines[i].startswith("> "):
+                    block_lines.append(lines[i][2:])
+                    i += 1
+                inner = self.parse("\n".join(block_lines))
+                html_parts.append(f"<blockquote>{inner}</blockquote>")
+                continue
+
+            # Unordered list
+            if re.match(r"^[\-\*\+] ", line):
+                items = []
+                while i < len(lines) and re.match(r"^[\-\*\+] ", lines[i]):
+                    items.append(f"<li>{self.parse_inline(lines[i][2:])}</li>")
+                    i += 1
+                html_parts.append("<ul>" + "".join(items) + "</ul>")
+                continue
+
+            # Ordered list
+            if re.match(r"^\d+\. ", line):
+                items = []
+                while i < len(lines) and re.match(r"^\d+\. ", lines[i]):
+                    text = re.sub(r"^\d+\. ", "", lines[i])
+                    items.append(f"<li>{self.parse_inline(text)}</li>")
+                    i += 1
+                html_parts.append("<ol>" + "".join(items) + "</ol>")
+                continue
+
+            # Horizontal rule
+            if re.match(r"^[-*_]{3,}$", line.strip()):
+                html_parts.append("<hr>")
+                i += 1
+                continue
+
+            # Paragraph
+            if line.strip():
+                para_lines = []
+                while i < len(lines) and lines[i].strip():
+                    para_lines.append(lines[i])
+                    i += 1
+                content = self.parse_inline(" ".join(para_lines))
+                html_parts.append(f"<p>{content}</p>")
+                continue
+
+            i += 1
+
+        return "\n".join(html_parts)
+
+    def to_html(self, markdown: str, wrap: bool = True) -> str:
+        body = self.parse(markdown)
+        if not wrap:
+            return body
+        return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  bodyfont-family:system-ui;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6
+  prebackground:#f4f4f4;padding:12px;border-radius:6px;overflow:auto
+  codebackground:#f0f0f0;padding:2px 4px;border-radius:3px
+  blockquoteborder-left:4px solid #ccc;margin:0;padding-left:16px;color:#666
+</style></head><body>{body}</body></html>"""
+
+if __name__ == "__main__":
+    md = """
+# Hello Markdown **Parser** 🎉
+
+This is a *paragraph* with **bold**, ***bold-italic***, ~~strikethrough~~ and `inline code`.
+
+## Features
+
+- Headings (H1–H6)
+- **Bold** / *Italic*
+- [Links](https://example.com)
+- ![Images](https://via.placeholder.com/50)
+
+### Ordered List
+
+1. First item
+2. Second item
+3. Third item
+
+> Blockquotes are also supported.
+> They can span multiple lines.
